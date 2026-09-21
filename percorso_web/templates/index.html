@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Percorso Economico</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>Percorso Economico</h1>
+  <p>Inserisci le tappe, imposta eventuali vincoli e calcola il percorso in auto piu' economico (distanza/tempo minimi).</p>
+</header>
+
+<main>
+  <section class="pannello">
+    <h2>Tappe</h2>
+    <div id="lista-tappe"></div>
+    <div class="riga-aggiungi">
+      <button type="button" id="btn-aggiungi">+ Aggiungi tappa</button>
+      <button type="button" id="btn-importa">&uarr; Importa da file (.txt/.csv)</button>
+      <input type="file" id="file-importa" accept=".txt,.csv" style="display:none;">
+    </div>
+    <p id="nota-importa" class="nota-piccola">Un indirizzo per riga. Sostituisce le tappe attuali.</p>
+
+    <h2>Opzioni</h2>
+    <div class="opzioni">
+      <div>
+        <label for="sel-partenza">Partenza obbligatoria</label>
+        <select id="sel-partenza"><option value="">Nessuna (scelta automatica)</option></select>
+      </div>
+      <div>
+        <label for="input-alternative">Numero di alternative</label>
+        <select id="input-alternative">
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3" selected>3</option>
+        </select>
+      </div>
+      <div>
+        <label for="input-consumo">Consumo (L/100km, opzionale)</label>
+        <input type="number" id="input-consumo" step="0.1" min="0" placeholder="es. 6.5">
+      </div>
+      <div>
+        <label for="input-prezzo">Prezzo carburante (EUR/L, opzionale)</label>
+        <input type="number" id="input-prezzo" step="0.01" min="0" placeholder="es. 1.80">
+      </div>
+      <div class="checkbox-riga">
+        <label><input type="checkbox" id="chk-andata-ritorno"> Andata e ritorno (torna alla partenza)</label>
+      </div>
+      <div>
+        <label for="input-centro-raggio">Distanza massima da (indirizzo, opzionale)</label>
+        <input type="text" id="input-centro-raggio" placeholder="es. Sede centrale, Bari">
+      </div>
+      <div>
+        <label for="input-raggio-km">Raggio massimo (km)</label>
+        <input type="number" id="input-raggio-km" step="1" min="0" placeholder="es. 30">
+      </div>
+      <div class="checkbox-riga">
+        <label><input type="checkbox" id="chk-centro-e-partenza"> Usa questo indirizzo anche come tappa di partenza</label>
+      </div>
+    </div>
+
+    <button type="button" class="btn-principale" id="btn-calcola">Calcola percorso</button>
+    <div id="messaggi"></div>
+  </section>
+
+  <section class="pannello">
+    <h2>Risultati</h2>
+    <div id="risultati"><div class="vuoto">I percorsi calcolati appariranno qui.</div></div>
+    <div id="mappa" style="display:none;"></div>
+  </section>
+</main>
+
+<footer>Geocodifica: OpenStreetMap/Nominatim &middot; Distanze e percorso: OSRM &middot; Nessun dato viene inviato altrove.</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
