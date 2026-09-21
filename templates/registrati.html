@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Registrati - Percorso Economico</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/auth.css">
+</head>
+<body class="pagina-auth">
+<div class="scheda-auth">
+  <h1>Percorso Economico</h1>
+  <p class="sottotitolo">Crea un account con la tua email aziendale ({{ domini_ammessi }})</p>
+
+  {% if errore %}<div class="msg-errore">{{ errore }}</div>{% endif %}
+
+  <form method="post">
+    <label for="nome">Nome e cognome</label>
+    <input type="text" id="nome" name="nome" required autofocus value="{{ nome or '' }}">
+    <label for="email">Email aziendale</label>
+    <input type="email" id="email" name="email" required value="{{ email or '' }}">
+    <label for="password">Password (almeno 8 caratteri)</label>
+    <input type="password" id="password" name="password" required minlength="8">
+    <button type="submit" class="btn-principale">Crea account</button>
+  </form>
+
+  <p class="nota-auth">Hai gi&agrave; un account? <a href="/login">Accedi</a></p>
+</div>
+</body>
+</html>

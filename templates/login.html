@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Accedi - Percorso Economico</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/auth.css">
+</head>
+<body class="pagina-auth">
+<div class="scheda-auth">
+  <h1>Percorso Economico</h1>
+  <p class="sottotitolo">Accedi con la tua email aziendale</p>
+
+  {% if errore %}<div class="msg-errore">{{ errore }}</div>{% endif %}
+
+  <form method="post">
+    <label for="email">Email aziendale</label>
+    <input type="email" id="email" name="email" required autofocus value="{{ email or '' }}">
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" required>
+    <button type="submit" class="btn-principale">Accedi</button>
+  </form>
+
+  <p class="nota-auth">Non hai un account? <a href="/registrati">Registrati</a></p>
+</div>
+</body>
+</html>

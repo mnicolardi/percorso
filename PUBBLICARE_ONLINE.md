@@ -1,90 +1,86 @@
-# Mettere "Percorso Economico" online (raggiungibile dal telefono da ovunque)
+# Mettere "Percorso Economico" online, con login e storico
 
-Per usarla dal telefono anche fuori WiFi (con i dati mobili), l'app deve
-girare su un server sempre acceso, non sul tuo PC. Qui sotto la procedura
-gratuita più semplice, con **Render.com**.
-
-Perché Render e non un altro hosting gratuito: molti hosting gratuiti
-(es. PythonAnywhere sul piano free) bloccano le chiamate in uscita verso
-siti esterni non in una loro "lista bianca" — e questa app ha bisogno di
-chiamare Nominatim (geocodifica) e OSRM (percorso), quindi smetterebbe di
-funzionare. Render non ha questa restrizione sul piano gratuito.
-
-**Limite del piano gratuito di Render**: se l'app resta inutilizzata per
-un po', "si addormenta" e il primo caricamento dopo un periodo di inattività
-può richiedere 30-60 secondi in più. Dopo essersi svegliata funziona
-normale. Per un uso personale va benissimo.
+L'app ora ha login (email aziendale + password) e salva lo storico dei
+percorsi per ogni utente. Questo cambia una cosa importante rispetto a
+prima: **serve un database vero e persistente**, non basta più il file
+SQLite locale (che su Render sparirebbe ad ogni riavvio/redeploy, perché
+il piano gratuito non ha disco persistente).
 
 ## Cosa ho già preparato nella cartella
 
-- `requirements.txt` — le librerie necessarie (Flask, requests, gunicorn)
-- `Procfile` — dice a Render come avviare l'app in produzione
+- `requirements.txt` — ora include anche `flask-sqlalchemy`, `flask-login`
+  e `psycopg2-binary` (driver per PostgreSQL)
+- `Procfile` — comando di avvio per la produzione
+- `modelli.py` — utenti e percorsi salvati; legge il database da
+  impostare tramite variabile d'ambiente `DATABASE_URL`
 
-Non serve modificare nessun altro file: `app.py` funziona sia per il
-doppio clic sul PC sia per l'hosting online, senza cambiamenti.
+In locale (doppio clic su `app.py`) non serve fare nulla: senza
+`DATABASE_URL` impostata, usa automaticamente un file SQLite locale
+(`percorso.db`), comodo per provare l'app.
 
-## Procedura (circa 10 minuti, tutto gratuito)
+## 1. Un database Postgres gratuito e permanente
 
-### 1. Metti il codice su GitHub (serve per collegarlo a Render)
+Il Postgres gratuito di Render scade dopo 30 giorni: meglio usarne uno
+esterno con piano gratuito **senza scadenza**. Due opzioni valide, scegline
+una:
 
-1. Vai su [github.com](https://github.com) e crea un account gratuito (se
-   non ne hai già uno).
-2. Clicca "New repository", dagli un nome (es. `percorso-economico`),
-   lascialo "Public" o "Private" (indifferente), NON aggiungere nulla
-   (niente README/licenza), poi "Create repository".
-3. Nella pagina del repository appena creato, clicca "uploading an
-   existing file" (o "Add file" → "Upload files").
-4. Trascina dentro **tutti** i file e le cartelle di `percorso_web`
-   (`app.py`, `motore.py`, `requirements.txt`, `Procfile`, la cartella
-   `static/` e la cartella `templates/` — trascinale così come sono,
-   GitHub mantiene le sottocartelle).
-5. In basso, scrivi un messaggio a caso (es. "primo caricamento") e
-   clicca "Commit changes".
+- **[Neon.tech](https://neon.tech)** — registrati gratis, crea un
+  progetto, copia la stringa di connessione ("Connection string") che
+  inizia con `postgresql://...`
+- **[Supabase](https://supabase.com)** — registrati gratis, crea un
+  progetto, in "Project Settings" → "Database" trovi la stringa di
+  connessione
 
-### 2. Collega Render al repository
+Tienila da parte, ti serve al passaggio 3.
 
-1. Vai su [render.com](https://render.com) e registrati gratuitamente
-   (puoi usare "Sign up with GitHub" per collegare subito l'account).
-2. Nella dashboard, clicca **"New +"** → **"Web Service"**.
-3. Scegli il repository `percorso-economico` che hai appena creato
-   (Render chiederà il permesso di accedere ai tuoi repository GitHub la
-   prima volta).
-4. Nella schermata di configurazione:
-   - **Name**: quello che vuoi (es. `percorso-economico`) — diventerà
-     parte dell'indirizzo web
-   - **Region**: una vicina (es. Frankfurt)
-   - **Branch**: `main`
-   - **Runtime**: Python 3
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: lascialo vuoto (Render legge il `Procfile`)
-     oppure scrivi `gunicorn app:app`
-   - **Instance Type**: **Free**
-5. Clicca **"Create Web Service"**.
+## 2. Il codice su GitHub (come prima)
 
-Render inizia a installare le librerie e avviare l'app (qualche minuto).
-Quando la scritta in alto diventa "Live", la tua app è online, con un
-indirizzo tipo:
+Se non l'hai già fatto: crea un repository su [github.com](https://github.com)
+e carica tutti i file della cartella `percorso_web` (drag & drop dal
+browser, incluse le sottocartelle `static/` e `templates/`).
 
-```
-https://percorso-economico.onrender.com
-```
+Se avevi già caricato una versione precedente, ricarica gli stessi file:
+GitHub sovrascrive quelli con lo stesso nome (basta trascinarli di nuovo
+nella pagina del repository e confermare "Commit changes").
 
-### 3. Usala dal telefono
+## 3. Il servizio web su Render, con le variabili d'ambiente giuste
 
-Apri quell'indirizzo dal browser del telefono. Per un accesso più comodo,
-usa "Aggiungi a schermata Home" (Safari su iPhone) o "Aggiungi a
-schermata principale" (Chrome su Android): si comporta come un'app vera,
-con un'icona sulla home.
+Se hai già creato il "Web Service" su Render in precedenza, vai nel suo
+pannello, sezione **"Environment"**, e aggiungi queste variabili (poi
+Render ripubblica da solo):
 
-## Aggiornare l'app in futuro
+| Nome variabile | Valore | A cosa serve |
+|---|---|---|
+| `DATABASE_URL` | la stringa di connessione di Neon/Supabase | dove salvare utenti e percorsi, in modo permanente |
+| `SECRET_KEY` | una stringa lunga e casuale, a tua scelta (es. genera con `python -c "import secrets; print(secrets.token_hex(32))"`) | tiene gli utenti collegati tra un riavvio e l'altro del server |
+| `ALLOWED_EMAIL_DOMAINS` | `goupnoleggi.it` (o più domini separati da virgola) | solo chi ha un'email di questi domini può registrarsi |
 
-Se in futuro ti mando delle modifiche: carichi i file aggiornati sullo
-stesso repository GitHub (sostituendo quelli vecchi), Render se ne accorge
-da solo e ripubblica l'app in automatico in un paio di minuti.
+Se stai creando il servizio da zero, aggiungi queste variabili nella
+sezione "Environment Variables" durante la configurazione iniziale
+(prima di "Create Web Service"), oltre ai passaggi già descritti in
+precedenza (Build command `pip install -r requirements.txt`, piano
+**Free**).
 
-## Attenzione: l'app è pubblica
+**Importante**: senza `SECRET_KEY` impostata esplicitamente, ogni
+riavvio del server (Render lo fa periodicamente) disconnette tutti gli
+utenti — impostala sempre in produzione.
 
-Chiunque conosca l'indirizzo può usarla (non ci sono dati sensibili
-memorizzati, ma consuma comunque le tue chiamate a Nominatim/OSRM). Se
-vuoi, posso aggiungere una password semplice per proteggerla — fammelo
-sapere.
+## 4. Primo accesso
+
+Una volta online, chiunque con un'email `@goupnoleggi.it` (o i domini
+che hai indicato) può andare su `/registrati` e crearsi un account. Non
+c'è un pannello amministrativo per gestire gli utenti: se in futuro
+serve (disattivare un account, vedere chi è registrato, promuovere un
+amministratore), fammelo sapere e lo aggiungo.
+
+## Limiti di questa versione
+
+- Nessun recupero password ("ho dimenticato la password") — se serve, lo
+  aggiungo (richiede l'invio di email, quindi un servizio come
+  SendGrid/Mailgun, anche loro con piano gratuito).
+- Lo storico è privato per ogni utente: nessuno vede i percorsi salvati
+  dai colleghi. Se preferisci uno storico condiviso da tutta l'azienda,
+  è una modifica semplice — dimmelo.
+- Resta valido tutto quanto detto in precedenza su Nominatim/OSRM
+  gratuiti: con un uso aziendale più intenso, prima o poi conviene
+  passare a un servizio di geocodifica/routing a pagamento.
