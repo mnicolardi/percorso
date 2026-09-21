@@ -39,8 +39,14 @@ Ora serve un account per usare l'app:
 ## Cosa puoi fare
 
 - **Aggiungere/rimuovere tappe**, riordinarle con le frecce ↑ ↓.
-- **Partenza obbligatoria**: scegli dal menu quale tappa dev'essere
-  sempre la prima del percorso (oppure lascia decidere al programma).
+- **Partenza obbligatoria** / **Arrivo obbligatorio**: scegli dal menu
+  quale tappa dev'essere sempre la prima e/o l'ultima del percorso
+  (oppure lascia decidere al programma). Puoi anche cliccare i pulsanti
+  **"Posizione attuale come partenza"** / **"...come arrivo"**: il browser
+  chiede il permesso di geolocalizzazione, rileva dove ti trovi ora e
+  aggiunge automaticamente quella posizione come tappa (funziona da PC e
+  da telefono; su PC di solito e' meno precisa perche' stima la posizione
+  dalla rete invece che dal GPS).
 - **Ordine fisso**: spunta la casella "ordine fisso" sulle tappe che
   devono mantenere il loro ordine relativo tra loro. Le altre tappe (non
   spuntate) vengono inserite automaticamente nel punto più conveniente.
@@ -53,7 +59,25 @@ Ora serve un account per usare l'app:
 - **Consumo/prezzo carburante** (opzionali): se li compili, ogni
   alternativa mostra anche una stima del costo in euro.
 - Per ogni alternativa: **"Mostra su mappa"** (percorso stradale reale,
-  interattivo) e **"Scarica CSV"** (elenco tappe con km/minuti parziali).
+  interattivo), **"Scarica CSV"** (elenco tappe con km/minuti parziali) e
+  **"Apri in Google Maps"** (apre il percorso, con tutte le tappe
+  nell'ordine calcolato, nell'app o sul sito di Google Maps: sul telefono,
+  se l'app e' installata, la navigazione e' pronta da avviare. Limite:
+  Google Maps accetta al massimo 25 tappe in un link diretto).
+- **Importare tappe da un Google Sheet** (anche il foglio dietro un'app
+  AppSheet): incolla il link nel campo apposito e clicca "Carica da Google
+  Fogli". Si apre una tabella con tutte le righe e colonne del foglio: puoi
+  **filtrare** (cerca in tutte le colonne), scegliere **quale colonna
+  contiene l'indirizzo** (indovinata automaticamente quando possibile) e
+  **selezionare solo le righe che ti interessano** prima di aggiungerle
+  come tappe.
+  - Se il foglio non è condiviso con nessuno (caso tipico di un foglio
+    AppSheet), clicca prima **"Collega il mio account Google"**: dopo
+    aver dato il consenso una volta, l'app legge i tuoi fogli privati
+    come se li aprissi tu, senza bisogno di condividerli. Va configurato
+    una volta sola (vedi `COLLEGARE_GOOGLE.md`).
+  - Senza account Google collegato, il foglio va condiviso con "Chiunque
+    abbia il link" (almeno come visualizzatore).
 - **Distanza massima ("cerchio")**: indica un indirizzo come centro e un
   raggio in km — le tappe che si trovano oltre quel raggio (in linea
   d'aria dal centro, non su strada) vengono escluse automaticamente dal

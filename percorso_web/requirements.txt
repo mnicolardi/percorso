@@ -4,3 +4,6 @@ gunicorn>=21.2
 flask-sqlalchemy>=3.1
 flask-login>=0.6.3
 psycopg2-binary>=2.9
+google-auth>=2.29
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.126

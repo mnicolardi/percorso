@@ -4,6 +4,7 @@
 
   const listaTappeEl = document.getElementById("lista-tappe");
   const selPartenzaEl = document.getElementById("sel-partenza");
+  const selArrivoEl = document.getElementById("sel-arrivo");
   const risultatiEl = document.getElementById("risultati");
   const messaggiEl = document.getElementById("messaggi");
   const mappaEl = document.getElementById("mappa");
@@ -93,19 +94,23 @@
     });
   }
 
-  function aggiornaSelettorePartenza() {
-    const valorePrecedente = selPartenzaEl.value;
-    selPartenzaEl.innerHTML = '<option value="">Nessuna (scelta automatica)</option>';
+  function riempiSelettore(selettoreEl, testoVuoto, valorePrecedente) {
+    selettoreEl.innerHTML = `<option value="">${testoVuoto}</option>`;
     Array.from(listaTappeEl.children).forEach((div, i) => {
       const indirizzo = div.querySelector(".campo-indirizzo").value.trim();
       const opt = document.createElement("option");
       opt.value = i;
       opt.textContent = indirizzo ? `${i + 1}. ${indirizzo}` : `${i + 1}. (tappa senza indirizzo)`;
-      selPartenzaEl.appendChild(opt);
+      selettoreEl.appendChild(opt);
     });
-    if ([...selPartenzaEl.options].some((o) => o.value === valorePrecedente)) {
-      selPartenzaEl.value = valorePrecedente;
+    if ([...selettoreEl.options].some((o) => o.value === valorePrecedente)) {
+      selettoreEl.value = valorePrecedente;
     }
+  }
+
+  function aggiornaSelettorePartenza() {
+    riempiSelettore(selPartenzaEl, "Nessuna (scelta automatica)", selPartenzaEl.value);
+    riempiSelettore(selArrivoEl, "Nessuno (scelta automatica)", selArrivoEl.value);
   }
 
   function leggiTappe() {
@@ -181,6 +186,210 @@
     selPartenzaEl.disabled = chkCentroPartenza.checked;
   });
 
+  // --- Geolocalizzazione: aggiunge la posizione attuale del dispositivo
+  // come tappa di partenza o di arrivo, chiedendo il permesso al browser
+  // e trasformando le coordinate in un indirizzo leggibile lato server.
+  function rilevaPosizioneAttuale() {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error("Il tuo browser non supporta la geolocalizzazione."));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        (err) => {
+          if (err.code === err.PERMISSION_DENIED) {
+            reject(new Error(
+              "Permesso di geolocalizzazione negato. Abilitalo nelle impostazioni del browser/sito per usare questa funzione."
+            ));
+          } else {
+            reject(new Error("Non sono riuscito a rilevare la tua posizione attuale."));
+          }
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+      );
+    });
+  }
+
+  async function usaPosizioneAttualeCome(ruolo) {
+    // ruolo: "partenza" oppure "arrivo"
+    mostraMessaggio("Rilevamento della posizione in corso...", "avviso");
+    try {
+      const { lat, lon } = await rilevaPosizioneAttuale();
+      const r = await fetch("/api/geolocalizza", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat, lon }),
+      });
+      if (gestisciSessioneScaduta(r)) return;
+      const dati = await leggiJsonSicuro(r);
+      if (!dati.ok) {
+        mostraMessaggio(dati.errore || "Non sono riuscito a determinare l'indirizzo dalla tua posizione.", "errore");
+        return;
+      }
+
+      const div = nuovaRigaTappa(dati.indirizzo);
+      if (ruolo === "partenza") {
+        listaTappeEl.insertBefore(div, listaTappeEl.firstChild);
+      } else {
+        listaTappeEl.appendChild(div); // nuovaRigaTappa la mette gia' in fondo, per chiarezza
+      }
+      rinumeraTappe();
+      aggiornaSelettorePartenza();
+
+      const idx = Array.from(listaTappeEl.children).indexOf(div);
+      if (ruolo === "partenza") {
+        selPartenzaEl.value = String(idx);
+      } else {
+        selArrivoEl.value = String(idx);
+      }
+      mostraMessaggio(`Posizione attuale aggiunta come ${ruolo}: ${dati.indirizzo}`, "avviso");
+    } catch (e) {
+      mostraMessaggio(e.message || String(e), "errore");
+    }
+  }
+
+  document.getElementById("btn-posizione-partenza").addEventListener("click", () => usaPosizioneAttualeCome("partenza"));
+  document.getElementById("btn-posizione-arrivo").addEventListener("click", () => usaPosizioneAttualeCome("arrivo"));
+
+  // --- Importazione indirizzi da un Google Sheet condiviso via link:
+  // si scaricano TUTTE le righe/colonne, poi l'utente filtra e seleziona
+  // quali righe usare (utile per un foglio AppSheet con tante colonne). ---
+  const btnImportaFoglio = document.getElementById("btn-importa-foglio");
+  const inputFoglioGoogle = document.getElementById("input-foglio-google");
+  const pannelloFoglio = document.getElementById("pannello-foglio-google");
+  const filtroFoglioEl = document.getElementById("filtro-foglio");
+  const selColonnaIndirizzoEl = document.getElementById("sel-colonna-indirizzo");
+  const tabellaFoglioEl = document.getElementById("tabella-foglio");
+  const conteggioSelezionatiEl = document.getElementById("conteggio-selezionati-foglio");
+
+  let righeFoglio = [];        // tutte le righe scaricate (array di oggetti colonna->valore)
+  let intestazioniFoglio = []; // nomi delle colonne, nell'ordine
+  let selezionateFoglio = new Set(); // indici (in righeFoglio) selezionati
+
+  btnImportaFoglio.addEventListener("click", async () => {
+    const link = inputFoglioGoogle.value.trim();
+    if (!link) {
+      mostraMessaggio("Incolla prima il link del foglio Google.", "errore");
+      return;
+    }
+    btnImportaFoglio.disabled = true;
+    const testoOriginale = btnImportaFoglio.textContent;
+    btnImportaFoglio.textContent = "Caricamento in corso...";
+    mostraMessaggio("", "");
+    try {
+      const r = await fetch("/api/importa-foglio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ link }),
+      });
+      if (gestisciSessioneScaduta(r)) return;
+      const dati = await leggiJsonSicuro(r);
+      if (!dati.ok) {
+        mostraMessaggio(dati.errore || "Errore nel caricamento del foglio.", "errore");
+        return;
+      }
+      intestazioniFoglio = dati.intestazioni;
+      righeFoglio = dati.righe;
+      selezionateFoglio = new Set();
+
+      selColonnaIndirizzoEl.innerHTML = intestazioniFoglio
+        .map((c) => `<option value="${c.replace(/"/g, "&quot;")}">${c}</option>`)
+        .join("");
+      if (dati.colonna_indirizzo_suggerita) {
+        selColonnaIndirizzoEl.value = dati.colonna_indirizzo_suggerita;
+      }
+
+      filtroFoglioEl.value = "";
+      pannelloFoglio.style.display = "block";
+      renderTabellaFoglio();
+      mostraMessaggio(`Caricate ${righeFoglio.length} righe dal foglio Google. Filtra e seleziona quelle da usare come tappe.`, "avviso");
+    } catch (e) {
+      mostraMessaggio("Errore di comunicazione con il server: " + e, "errore");
+    } finally {
+      btnImportaFoglio.disabled = false;
+      btnImportaFoglio.textContent = testoOriginale;
+    }
+  });
+
+  function aggiornaConteggioSelezionati() {
+    conteggioSelezionatiEl.textContent = `${selezionateFoglio.size} righe selezionate`;
+  }
+
+  function renderTabellaFoglio() {
+    const filtro = filtroFoglioEl.value.trim().toLowerCase();
+    tabellaFoglioEl.innerHTML = "";
+    righeFoglio.forEach((riga, idx) => {
+      const testoRiga = intestazioniFoglio.map((c) => riga[c] || "").join(" ").toLowerCase();
+      if (filtro && !testoRiga.includes(filtro)) return;
+
+      const div = document.createElement("div");
+      div.className = "riga-foglio-elemento";
+      const anteprima = intestazioniFoglio
+        .slice(0, 4)
+        .map((c) => riga[c])
+        .filter((v) => v)
+        .join(" · ");
+      div.innerHTML = `
+        <label>
+          <input type="checkbox" class="chk-riga-foglio" data-idx="${idx}" ${selezionateFoglio.has(idx) ? "checked" : ""}>
+          <span>${anteprima || "(riga vuota)"}</span>
+        </label>
+      `;
+      div.querySelector(".chk-riga-foglio").addEventListener("change", (ev) => {
+        if (ev.target.checked) selezionateFoglio.add(idx);
+        else selezionateFoglio.delete(idx);
+        aggiornaConteggioSelezionati();
+      });
+      tabellaFoglioEl.appendChild(div);
+    });
+    if (!tabellaFoglioEl.children.length) {
+      tabellaFoglioEl.innerHTML = '<div class="nota-piccola">Nessuna riga corrisponde al filtro.</div>';
+    }
+    aggiornaConteggioSelezionati();
+  }
+
+  filtroFoglioEl.addEventListener("input", renderTabellaFoglio);
+
+  document.getElementById("btn-seleziona-tutti-foglio").addEventListener("click", () => {
+    Array.from(tabellaFoglioEl.querySelectorAll(".chk-riga-foglio")).forEach((chk) => {
+      chk.checked = true;
+      selezionateFoglio.add(parseInt(chk.dataset.idx, 10));
+    });
+    aggiornaConteggioSelezionati();
+  });
+  document.getElementById("btn-deseleziona-tutti-foglio").addEventListener("click", () => {
+    Array.from(tabellaFoglioEl.querySelectorAll(".chk-riga-foglio")).forEach((chk) => {
+      chk.checked = false;
+    });
+    selezionateFoglio.clear();
+    aggiornaConteggioSelezionati();
+  });
+
+  document.getElementById("btn-aggiungi-selezionati-foglio").addEventListener("click", () => {
+    const colonna = selColonnaIndirizzoEl.value;
+    if (!colonna) {
+      mostraMessaggio("Scegli quale colonna contiene l'indirizzo.", "errore");
+      return;
+    }
+    if (!selezionateFoglio.size) {
+      mostraMessaggio("Seleziona almeno una riga da aggiungere.", "errore");
+      return;
+    }
+    let aggiunte = 0;
+    Array.from(selezionateFoglio)
+      .sort((a, b) => a - b)
+      .forEach((idx) => {
+        const indirizzo = (righeFoglio[idx][colonna] || "").trim();
+        if (indirizzo) {
+          nuovaRigaTappa(indirizzo);
+          aggiunte += 1;
+        }
+      });
+    aggiornaSelettorePartenza();
+    mostraMessaggio(`Aggiunte ${aggiunte} tappe dal foglio Google.`, "avviso");
+  });
+
   async function calcola() {
     mostraMessaggio("", "");
     centroComeTappaDiPartenza();
@@ -190,9 +399,15 @@
       return;
     }
     const partenzaVal = selPartenzaEl.value;
+    const arrivoVal = selArrivoEl.value;
+    if (partenzaVal !== "" && arrivoVal !== "" && partenzaVal === arrivoVal) {
+      mostraMessaggio("La tappa di partenza e quella di arrivo non possono essere la stessa.", "errore");
+      return;
+    }
     const corpo = {
       tappe,
       partenza: partenzaVal === "" ? null : parseInt(partenzaVal, 10),
+      arrivo: arrivoVal === "" ? null : parseInt(arrivoVal, 10),
       andata_ritorno: document.getElementById("chk-andata-ritorno").checked,
       consumo: document.getElementById("input-consumo").value || null,
       prezzo: document.getElementById("input-prezzo").value || null,
@@ -273,6 +488,7 @@
           <button type="button" class="btn-mappa">Mostra su mappa</button>
           <button type="button" class="btn-csv">Scarica CSV</button>
           <button type="button" class="btn-salva">Salva percorso</button>
+          <button type="button" class="btn-navigatore">Apri in Google Maps</button>
         </div>
       `;
       div.querySelector(".btn-mappa").addEventListener("click", () => {
@@ -282,6 +498,7 @@
       });
       div.querySelector(".btn-csv").addEventListener("click", () => scaricaCsv(alt, i));
       div.querySelector(".btn-salva").addEventListener("click", (ev) => salvaPercorso(alt, ev.target));
+      div.querySelector(".btn-navigatore").addEventListener("click", () => apriInGoogleMaps(alt));
       risultatiEl.appendChild(div);
     });
   }
@@ -349,6 +566,48 @@
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  function apriInGoogleMaps(alt) {
+    // Apre il percorso calcolato nell'app/sito di Google Maps, con tutte le
+    // tappe come waypoint nell'ordine scelto: sul telefono, se l'app di
+    // Google Maps e' installata, si apre direttamente li' con la
+    // navigazione pronta da avviare.
+    const tappe = alt.tappe;
+    if (!tappe.length) return;
+    const sequenzaCompleta = alt.andata_ritorno ? tappe.concat([tappe[0]]) : tappe;
+
+    // Google Maps accetta un numero limitato di tappe in un link diretto:
+    // teniamoci larghi ma avvisiamo se il percorso e' piu' lungo di cosi'.
+    const MASSIMO_TAPPE_LINK = 25;
+    let elenco = sequenzaCompleta;
+    let troncato = false;
+    if (elenco.length > MASSIMO_TAPPE_LINK) {
+      elenco = elenco.slice(0, MASSIMO_TAPPE_LINK);
+      troncato = true;
+    }
+
+    const origine = `${elenco[0].lat},${elenco[0].lon}`;
+    const destinazione = `${elenco[elenco.length - 1].lat},${elenco[elenco.length - 1].lon}`;
+    const intermedie = elenco.slice(1, -1).map((t) => `${t.lat},${t.lon}`).join("|");
+
+    const params = new URLSearchParams({
+      api: "1",
+      origin: origine,
+      destination: destinazione,
+      travelmode: "driving",
+    });
+    let url = `https://www.google.com/maps/dir/?${params.toString()}`;
+    if (intermedie) url += `&waypoints=${encodeURIComponent(intermedie)}`;
+
+    window.open(url, "_blank");
+
+    if (troncato) {
+      mostraMessaggio(
+        `Google Maps accetta al massimo ${MASSIMO_TAPPE_LINK} tappe in un link diretto: sono state incluse solo le prime ${MASSIMO_TAPPE_LINK}.`,
+        "avviso"
+      );
+    }
   }
 
   async function mostraSuMappa(alt) {

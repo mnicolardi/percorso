@@ -12,6 +12,8 @@ Logica di calcolo per l'app web "Percorso Economico":
 
 from __future__ import annotations
 
+import csv
+import io
 import itertools
 import math
 import re
@@ -22,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 import requests
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 OSRM_TABLE_URL = "https://router.project-osrm.org/table/v1/driving/"
 OSRM_ROUTE_URL = "https://router.project-osrm.org/route/v1/driving/"
 USER_AGENT = "percorso-economico-web/1.0 (uso personale)"
@@ -150,6 +153,205 @@ def geocodifica(indirizzo: str) -> Optional[Tuple[float, float]]:
     return None
 
 
+def geocodifica_inversa(lat: float, lon: float) -> Optional[str]:
+    """Da coordinate GPS (geolocalizzazione del browser) a un indirizzo
+    leggibile, nello stesso formato strutturato "Via, civico - CAP - Comune
+    - PR" usato dal resto del programma quando i dati sono completi;
+    altrimenti restituisce il nome esteso del punto trovato da Nominatim."""
+    headers = {"User-Agent": USER_AGENT}
+    params = {"format": "json", "lat": lat, "lon": lon, "addressdetails": 1, "zoom": 18}
+    dati = {}
+    try:
+        r = requests.get(NOMINATIM_REVERSE_URL, params=params, headers=headers, timeout=15)
+        r.raise_for_status()
+        dati = r.json()
+    except requests.RequestException:
+        return None
+    finally:
+        time.sleep(NOMINATIM_DELAY_S)
+
+    indirizzo = dati.get("address", {})
+    via = indirizzo.get("road") or indirizzo.get("pedestrian") or indirizzo.get("footway") or ""
+    civico = indirizzo.get("house_number", "")
+    cap = indirizzo.get("postcode", "")
+    comune = (
+        indirizzo.get("city") or indirizzo.get("town") or indirizzo.get("village")
+        or indirizzo.get("municipality") or indirizzo.get("hamlet") or ""
+    )
+    prov_raw = indirizzo.get("ISO3166-2-lvl4", "")
+    prov = prov_raw.split("-")[-1].upper() if "-" in prov_raw else ""
+    if prov not in _SIGLE_PROVINCE_IT:
+        prov = ""
+
+    via_completa = f"{via}, {civico}".strip(", ") if via else ""
+    if via_completa and cap and comune and prov:
+        return f"{via_completa} - {cap} - {comune} - {prov}"
+    return dati.get("display_name")
+
+
+# ----------------------------------------------------------------------
+# IMPORTAZIONE INDIRIZZI DA GOOGLE FOGLI (link pubblico)
+# ----------------------------------------------------------------------
+
+_RE_ID_FOGLIO_GOOGLE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9_-]+)")
+_RE_GID_FOGLIO_GOOGLE = re.compile(r"[#&?]gid=(\d+)")
+
+
+class ErroreImportazioneFoglio(Exception):
+    """Errore riconoscibile per problemi nell'importazione da Google Fogli,
+    con un messaggio gia' pronto per l'utente (in italiano)."""
+
+
+def _url_esportazione_csv(link: str) -> str:
+    m = _RE_ID_FOGLIO_GOOGLE.search(link)
+    if not m:
+        raise ErroreImportazioneFoglio(
+            "Il link non sembra un link di Google Fogli valido "
+            "(deve contenere .../spreadsheets/d/ID.../...)."
+        )
+    id_foglio = m.group(1)
+    m_gid = _RE_GID_FOGLIO_GOOGLE.search(link)
+    gid = m_gid.group(1) if m_gid else "0"
+    return f"https://docs.google.com/spreadsheets/d/{id_foglio}/export?format=csv&gid={gid}"
+
+
+def _scarica_csv_foglio(link: str) -> List[List[str]]:
+    url = _url_esportazione_csv(link)
+    try:
+        r = requests.get(url, timeout=20, allow_redirects=True)
+    except requests.RequestException as e:
+        raise ErroreImportazioneFoglio(f"Impossibile raggiungere Google Fogli: {e}")
+
+    content_type = r.headers.get("Content-Type", "")
+    # Se il foglio non e' condiviso pubblicamente, Google reindirizza a una
+    # pagina di login HTML invece di restituire il CSV.
+    if "accounts.google.com" in r.url or "text/html" in content_type:
+        raise ErroreImportazioneFoglio(
+            "Non riesco a leggere questo foglio: assicurati che la condivisione sia "
+            'impostata su "Chiunque abbia il link" (almeno come visualizzatore), poi riprova.'
+        )
+    if r.status_code != 200:
+        raise ErroreImportazioneFoglio(
+            f"Google Fogli ha risposto con un errore (codice {r.status_code})."
+        )
+
+    testo = r.content.decode("utf-8-sig", errors="replace")
+    return list(csv.reader(io.StringIO(testo)))
+
+
+_INTESTAZIONI_INDIRIZZO_PROBABILI = (
+    "indirizzo", "indirizzi", "address", "via", "ubicazione", "luogo", "tappa", "tappe",
+)
+
+
+def _righe_da_matrice(matrice: List[List[str]]) -> Tuple[List[str], List[Dict[str, str]]]:
+    """Converte una matrice grezza di celle (righe x colonne, come CSV o
+    come risposta dell'API Google Sheets) in (intestazioni, righe) - lista
+    di dizionari colonna->valore, saltando le righe completamente vuote."""
+    if not matrice:
+        return [], []
+
+    prima_riga = [str(c).strip() for c in matrice[0]]
+    # Consideriamo la prima riga un'intestazione se contiene testo non
+    # numerico in almeno una cella (tipico di un foglio con colonne tipo
+    # "Cliente, Indirizzo, Zona, ..."), altrimenti generiamo nomi di
+    # colonna generici e trattiamo la prima riga come dato.
+    ha_intestazione = any(c and not c.replace(",", ".").replace("-", "").isdigit() for c in prima_riga)
+    if ha_intestazione:
+        intestazioni = [c or f"Colonna {i + 1}" for i, c in enumerate(prima_riga)]
+        corpo = matrice[1:]
+    else:
+        intestazioni = [f"Colonna {i + 1}" for i in range(len(prima_riga))]
+        corpo = matrice
+
+    righe = []
+    for riga_grezza in corpo:
+        riga_grezza = [str(c).strip() for c in riga_grezza]
+        if not any(riga_grezza):
+            continue  # riga completamente vuota
+        riga = {}
+        for i, intestazione in enumerate(intestazioni):
+            riga[intestazione] = riga_grezza[i] if i < len(riga_grezza) else ""
+        righe.append(riga)
+
+    return intestazioni, righe
+
+
+def importa_righe_da_google_sheet(link: str) -> Tuple[List[str], List[Dict[str, str]]]:
+    """Scarica un Google Sheet condiviso pubblicamente (link, "chiunque
+    abbia il link puo' visualizzare") e restituisce (intestazioni, righe)
+    con TUTTE le colonne, cosi' l'utente puo' filtrare/selezionare le righe
+    da usare come tappe (es. un foglio AppSheet con clienti, indirizzi,
+    zona, note, ecc., non solo gli indirizzi)."""
+    righe_csv = _scarica_csv_foglio(link)
+    return _righe_da_matrice(righe_csv)
+
+
+def importa_righe_da_google_sheet_api(link: str, credenziali) -> Tuple[List[str], List[Dict[str, str]]]:
+    """Come importa_righe_da_google_sheet, ma legge il foglio tramite
+    l'API ufficiale di Google Sheets usando le credenziali OAuth
+    dell'utente che ha collegato il proprio account Google: funziona anche
+    con fogli PRIVATI (non condivisi pubblicamente), perche' e' come se ad
+    aprirlo fosse direttamente l'utente proprietario."""
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+
+    m = _RE_ID_FOGLIO_GOOGLE.search(link)
+    if not m:
+        raise ErroreImportazioneFoglio(
+            "Il link non sembra un link di Google Fogli valido "
+            "(deve contenere .../spreadsheets/d/ID.../...)."
+        )
+    id_foglio = m.group(1)
+    m_gid = _RE_GID_FOGLIO_GOOGLE.search(link)
+    gid = m_gid.group(1) if m_gid else None
+
+    try:
+        servizio = build("sheets", "v4", credentials=credenziali, cache_discovery=False)
+        metadati = servizio.spreadsheets().get(
+            spreadsheetId=id_foglio, fields="sheets.properties"
+        ).execute()
+        fogli = metadati.get("sheets", [])
+        titolo_foglio = None
+        if gid is not None:
+            for f in fogli:
+                if str(f["properties"].get("sheetId")) == gid:
+                    titolo_foglio = f["properties"]["title"]
+                    break
+        if titolo_foglio is None and fogli:
+            titolo_foglio = fogli[0]["properties"]["title"]
+        if titolo_foglio is None:
+            raise ErroreImportazioneFoglio("Il foglio Google non contiene nessuna scheda leggibile.")
+
+        risposta = servizio.spreadsheets().values().get(
+            spreadsheetId=id_foglio, range=f"'{titolo_foglio}'"
+        ).execute()
+    except HttpError as e:
+        if e.resp.status in (403, 404):
+            raise ErroreImportazioneFoglio(
+                "Il tuo account Google collegato non ha accesso a questo foglio "
+                "(controlla di aver incollato il link del foglio giusto, con lo "
+                "stesso account Google che lo possiede o con cui e' condiviso)."
+            )
+        raise ErroreImportazioneFoglio(f"Errore dall'API di Google Fogli: {e}")
+
+    valori = risposta.get("values", [])
+    return _righe_da_matrice(valori)
+
+
+def indovina_colonna_indirizzo(intestazioni: List[str]) -> Optional[str]:
+    """Prova a indovinare quale colonna contiene l'indirizzo, per
+    precompilare la scelta nell'interfaccia (l'utente puo' sempre cambiarla)."""
+    for intestazione in intestazioni:
+        if _normalizza(intestazione) in _INTESTAZIONI_INDIRIZZO_PROBABILI:
+            return intestazione
+    for intestazione in intestazioni:
+        norm = _normalizza(intestazione)
+        if any(parola in norm for parola in _INTESTAZIONI_INDIRIZZO_PROBABILI):
+            return intestazione
+    return intestazioni[0] if intestazioni else None
+
+
 # ----------------------------------------------------------------------
 # MATRICE DISTANZE/TEMPI E GEOMETRIA STRADALE (OSRM)
 # ----------------------------------------------------------------------
@@ -220,12 +422,15 @@ def _costruisci_percorso(
     liberi_ordine_inserimento: List[int],
     matrice,
     chiudi_anello: bool,
+    arrivo_fissa: Optional[int] = None,
 ) -> List[int]:
     """Costruisce un percorso: prima piazza (in ordine) le tappe 'fissi_in_ordine'
     rispettando il loro ordine relativo (e la partenza obbligatoria in
-    posizione 0, se richiesta), poi inserisce le tappe libere una alla
-    volta nella posizione piu' economica, poi affina con una ricerca locale
-    che sposta solo le tappe libere."""
+    posizione 0, se richiesta), poi - se c'e' un arrivo obbligatorio - lo
+    mette in ultima posizione e la riserva (nessuna tappa libera puo' essere
+    inserita dopo), poi inserisce le tappe libere una alla volta nella
+    posizione piu' economica, infine affina con una ricerca locale che
+    sposta solo le tappe libere."""
     pos_min_prossimo_fisso = 0
     seq: List[int] = []
     posizione_bloccata = partenza_fissa is not None
@@ -235,7 +440,7 @@ def _costruisci_percorso(
         pos_min_prossimo_fisso = 1
 
     for f in fissi_in_ordine:
-        if f == partenza_fissa:
+        if f == partenza_fissa or f == arrivo_fissa:
             continue
         migliore_pos, migliore_costo = None, float("inf")
         for pos in range(pos_min_prossimo_fisso, len(seq) + 1):
@@ -245,12 +450,19 @@ def _costruisci_percorso(
         seq.insert(migliore_pos, f)
         pos_min_prossimo_fisso = migliore_pos + 1
 
+    # L'arrivo obbligatorio va sempre in ultima posizione: lo aggiungiamo
+    # subito e da qui in poi limitiamo di un passo il "tetto" delle
+    # posizioni disponibili, cosi' nessuna tappa libera puo' finire dopo di lui.
+    if arrivo_fissa is not None:
+        seq.append(arrivo_fissa)
+    limite_extra = -1 if arrivo_fissa is not None else 0
+
     # Inserimento delle tappe libere, nell'ordine dato, sempre nella
-    # posizione piu' economica del momento.
+    # posizione piu' economica del momento (mai dopo l'arrivo obbligatorio).
     pos_iniziale_consentita = 1 if posizione_bloccata else 0
     for nodo in liberi_ordine_inserimento:
         migliore_pos, migliore_costo = None, float("inf")
-        for pos in range(pos_iniziale_consentita, len(seq) + 1):
+        for pos in range(pos_iniziale_consentita, len(seq) + 1 + limite_extra):
             c = _costo_inserimento(seq, pos, nodo, matrice, chiudi_anello)
             if c < migliore_costo:
                 migliore_costo, migliore_pos = c, pos
@@ -259,15 +471,20 @@ def _costruisci_percorso(
     # Ricerca locale: per ogni tappa LIBERA proviamo a rimuoverla e
     # reinserirla nella posizione migliore del momento (senza mai toccare
     # le tappe fisse, che restano dove sono rispetto alle altre tappe
-    # fisse). Si ripete finche' la lunghezza totale continua a scendere.
-    insieme_fissi = set(fissi_in_ordine) | ({partenza_fissa} if partenza_fissa is not None else set())
+    # fisse, ne' l'eventuale arrivo obbligatorio). Si ripete finche' la
+    # lunghezza totale continua a scendere.
+    insieme_fissi = (
+        set(fissi_in_ordine)
+        | ({partenza_fissa} if partenza_fissa is not None else set())
+        | ({arrivo_fissa} if arrivo_fissa is not None else set())
+    )
     lunghezza_attuale = lunghezza_percorso(seq, matrice, chiudi_anello)
     for _ in range(25):
         migliorato_in_questo_giro = False
         for nodo in [x for x in seq if x not in insieme_fissi]:
             seq.remove(nodo)
             migliore_pos, migliore_costo = None, float("inf")
-            for pos in range(pos_iniziale_consentita, len(seq) + 1):
+            for pos in range(pos_iniziale_consentita, len(seq) + 1 + limite_extra):
                 c = _costo_inserimento(seq, pos, nodo, matrice, chiudi_anello)
                 if c < migliore_costo:
                     migliore_costo, migliore_pos = c, pos
@@ -289,16 +506,22 @@ def ottimizza_con_alternative(
     matrice,
     chiudi_anello: bool,
     n_alternative: int = 3,
+    indice_arrivo: Optional[int] = None,
 ) -> List[List[int]]:
     """Ritorna fino a n_alternative percorsi (liste di indici) distinti,
     ordinati dal piu' economico. Rispetta:
     - indice_partenza: se dato, e' sempre la prima tappa del percorso
+    - indice_arrivo: se dato, e' sempre l'ultima tappa del percorso
     - indici_fissi_in_ordine: queste tappe compaiono nel percorso rispettando
       il loro ordine relativo (le tappe libere si inseriscono dove conviene)
     """
     tutti = list(range(n))
-    fissi = [f for f in indici_fissi_in_ordine if f != indice_partenza]
-    esclusi = set(fissi) | ({indice_partenza} if indice_partenza is not None else set())
+    fissi = [f for f in indici_fissi_in_ordine if f != indice_partenza and f != indice_arrivo]
+    esclusi = (
+        set(fissi)
+        | ({indice_partenza} if indice_partenza is not None else set())
+        | ({indice_arrivo} if indice_arrivo is not None else set())
+    )
     liberi_base = [i for i in tutti if i not in esclusi]
 
     # Se il problema e' piccolo e senza vincoli di ordine fisso ne' di
@@ -317,13 +540,15 @@ def ottimizza_con_alternative(
         varianti_ordine_inserimento = [[]]
 
     for variante in varianti_ordine_inserimento:
-        seq = _costruisci_percorso(n, fissi, indice_partenza, variante, matrice, chiudi_anello)
+        seq = _costruisci_percorso(
+            n, fissi, indice_partenza, variante, matrice, chiudi_anello, arrivo_fissa=indice_arrivo
+        )
         if seq not in candidati:
             candidati.append(seq)
 
-    # Se non ci sono vincoli (nessuna tappa fissa ne' partenza) e n e'
-    # piccolo, aggiungiamo anche l'ottimo esatto come ulteriore candidato.
-    if not fissi and indice_partenza is None and n <= 9:
+    # Se non ci sono vincoli (nessuna tappa fissa, ne' partenza, ne' arrivo)
+    # e n e' piccolo, aggiungiamo anche l'ottimo esatto come ulteriore candidato.
+    if not fissi and indice_partenza is None and indice_arrivo is None and n <= 9:
         migliore_esatta, migliore_len = None, float("inf")
         for partenza_prova in range(n):
             liberi_prova = [i for i in tutti if i != partenza_prova]

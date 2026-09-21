@@ -43,6 +43,12 @@ class Utente(UserMixin, db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     creato_il = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Token OAuth (JSON) per leggere i Google Sheet PRIVATI dell'utente senza
+    # che debbano essere condivisi pubblicamente: presente solo se l'utente
+    # ha cliccato "Collega il mio account Google". Contiene access/refresh
+    # token con permesso di sola LETTURA sui fogli Google.
+    google_token_json = db.Column(db.Text, nullable=True)
+
     percorsi = db.relationship("PercorsoSalvato", backref="utente", lazy=True, cascade="all, delete-orphan")
 
     def imposta_password(self, password: str) -> None:
