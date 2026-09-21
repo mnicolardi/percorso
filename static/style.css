@@ -24,6 +24,11 @@ header {
   padding: 22px 24px 16px;
   border-bottom: 1px solid var(--bordo);
   background: var(--pannello);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 header h1 {
@@ -48,6 +53,94 @@ main {
 
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr; }
+}
+
+/* --- Schermi da telefono: tocco piu' facile, meno spazio sprecato --- */
+@media (max-width: 640px) {
+  header {
+    padding: 14px 16px 12px;
+  }
+  header h1 { font-size: 1.25rem; }
+  header p { font-size: 0.85rem; }
+
+  main {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .pannello {
+    padding: 14px;
+    border-radius: 10px;
+  }
+  .pannello h2 { font-size: 1rem; }
+
+  /* Le tappe passano da una riga rigida a due righe: indirizzo sopra,
+     azioni (ordine fisso, sposta, rimuovi) sotto, cosi' i bottoni restano
+     abbastanza grandi da toccare col dito. */
+  .tappa {
+    grid-template-columns: 24px 1fr;
+    grid-template-rows: auto auto;
+  }
+  .tappa input[type="text"] {
+    font-size: 16px; /* evita lo zoom automatico di iOS Safari sui campi piccoli */
+    padding: 9px 8px;
+  }
+  .tappa-azioni {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  .btn-icona {
+    width: 34px;
+    height: 34px;
+    font-size: 1rem;
+  }
+
+  .riga-aggiungi { flex-direction: column; }
+  .riga-aggiungi button {
+    width: 100%;
+    padding: 11px 12px;
+    font-size: 0.92rem;
+  }
+
+  .riga-collega-google { flex-direction: column; align-items: flex-start; }
+  .riga-foglio-google { flex-direction: column; }
+  .riga-foglio-google input[type="text"],
+  .riga-foglio-google button {
+    width: 100%;
+    font-size: 16px;
+  }
+  .foglio-controlli { flex-direction: column; align-items: stretch; }
+  .foglio-controlli input[type="text"] { font-size: 16px; }
+  .foglio-controlli button { padding: 9px 10px; }
+  .foglio-azioni { flex-direction: column; align-items: stretch; }
+  .foglio-azioni button { width: 100%; padding: 11px; }
+
+  .opzioni {
+    grid-template-columns: 1fr;
+  }
+  .opzioni select, .opzioni input[type="number"], .opzioni input[type="text"] {
+    font-size: 16px;
+    padding: 9px 8px;
+  }
+
+  .btn-principale { padding: 14px; font-size: 1rem; }
+
+  .alternativa { padding: 12px; }
+  .alternativa-cifre { flex-wrap: wrap; gap: 8px 16px; }
+  .alternativa-azioni {
+    flex-wrap: wrap;
+  }
+  .alternativa-azioni button,
+  .alternativa-azioni a {
+    flex: 1 1 calc(50% - 8px);
+    padding: 10px;
+    font-size: 0.85rem;
+    min-height: 40px;
+    justify-content: center;
+  }
+
+  #mappa { height: 300px; }
 }
 
 .pannello {
@@ -375,15 +468,22 @@ button {
 }
 .elenco-tappe-ordinate li { margin-bottom: 2px; }
 
-.alternativa-azioni { display: flex; gap: 8px; }
-.alternativa-azioni button {
+.alternativa-azioni { display: flex; gap: 8px; flex-wrap: wrap; }
+.alternativa-azioni button,
+.alternativa-azioni a {
   border: 1px solid var(--bordo);
   background: #fbfaf6;
   border-radius: 6px;
   padding: 6px 10px;
   font-size: 0.82rem;
+  color: var(--testo);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
 }
-.alternativa-azioni button:hover { background: #eef3f8; }
+.alternativa-azioni button:hover,
+.alternativa-azioni a:hover { background: #eef3f8; }
 
 #mappa {
   height: 420px;

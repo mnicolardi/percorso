@@ -36,13 +36,6 @@
   }
   let layerCerchio = null;
 
-  const INDIRIZZI_ESEMPIO = [
-    "Piazza del Duomo, Milano",
-    "Stazione Centrale, Milano",
-    "Navigli, Milano",
-    "Castello Sforzesco, Milano",
-  ];
-
   function nuovaRigaTappa(valore) {
     contatoreTappe += 1;
     const id = contatoreTappe;
@@ -156,8 +149,9 @@
     inputFile.value = "";
   });
 
-  // Precompila con alcune tappe di esempio al primo avvio
-  INDIRIZZI_ESEMPIO.forEach((ind) => nuovaRigaTappa(ind));
+  // Parte con due righe vuote pronte da compilare (nessun indirizzo di esempio precompilato)
+  nuovaRigaTappa("");
+  nuovaRigaTappa("");
   aggiornaSelettorePartenza();
 
   btnCalcola.addEventListener("click", calcola);
@@ -488,7 +482,7 @@
           <button type="button" class="btn-mappa">Mostra su mappa</button>
           <button type="button" class="btn-csv">Scarica CSV</button>
           <button type="button" class="btn-salva">Salva percorso</button>
-          <button type="button" class="btn-navigatore">Apri in Google Maps</button>
+          <a class="btn-navigatore" href="${urlGoogleMaps(alt).url}" target="_blank" rel="noopener noreferrer">Apri in Google Maps</a>
         </div>
       `;
       div.querySelector(".btn-mappa").addEventListener("click", () => {
@@ -498,7 +492,10 @@
       });
       div.querySelector(".btn-csv").addEventListener("click", () => scaricaCsv(alt, i));
       div.querySelector(".btn-salva").addEventListener("click", (ev) => salvaPercorso(alt, ev.target));
-      div.querySelector(".btn-navigatore").addEventListener("click", () => apriInGoogleMaps(alt));
+      if (urlGoogleMaps(alt).troncato) {
+        div.querySelector(".btn-navigatore").title =
+          "Google Maps accetta al massimo 25 tappe in un link diretto: sono incluse solo le prime 25.";
+      }
       risultatiEl.appendChild(div);
     });
   }
@@ -568,17 +565,18 @@
     URL.revokeObjectURL(url);
   }
 
-  function apriInGoogleMaps(alt) {
-    // Apre il percorso calcolato nell'app/sito di Google Maps, con tutte le
-    // tappe come waypoint nell'ordine scelto: sul telefono, se l'app di
-    // Google Maps e' installata, si apre direttamente li' con la
-    // navigazione pronta da avviare.
+  function urlGoogleMaps(alt) {
+    // Costruisce (senza aprirla) l'URL di Google Maps con tutte le tappe
+    // come waypoint nell'ordine scelto: viene messa nell'attributo href di
+    // un vero link <a>, cosi' il click lo apre come un link normale invece
+    // che con window.open() da JavaScript - metodo che molti browser
+    // (soprattutto su telefono) bloccano trattandolo come un popup.
     const tappe = alt.tappe;
-    if (!tappe.length) return;
+    if (!tappe.length) return { url: "#", troncato: false };
     const sequenzaCompleta = alt.andata_ritorno ? tappe.concat([tappe[0]]) : tappe;
 
     // Google Maps accetta un numero limitato di tappe in un link diretto:
-    // teniamoci larghi ma avvisiamo se il percorso e' piu' lungo di cosi'.
+    // teniamoci larghi ma segnaliamo se il percorso e' piu' lungo di cosi'.
     const MASSIMO_TAPPE_LINK = 25;
     let elenco = sequenzaCompleta;
     let troncato = false;
@@ -600,14 +598,7 @@
     let url = `https://www.google.com/maps/dir/?${params.toString()}`;
     if (intermedie) url += `&waypoints=${encodeURIComponent(intermedie)}`;
 
-    window.open(url, "_blank");
-
-    if (troncato) {
-      mostraMessaggio(
-        `Google Maps accetta al massimo ${MASSIMO_TAPPE_LINK} tappe in un link diretto: sono state incluse solo le prime ${MASSIMO_TAPPE_LINK}.`,
-        "avviso"
-      );
-    }
+    return { url, troncato };
   }
 
   async function mostraSuMappa(alt) {
