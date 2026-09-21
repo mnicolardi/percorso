@@ -1,0 +1,103 @@
+.pagina-auth {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.scheda-auth {
+  width: 100%;
+  max-width: 380px;
+  background: var(--pannello);
+  border: 1px solid var(--bordo);
+  border-radius: 12px;
+  padding: 28px 26px;
+}
+
+.scheda-auth h1 {
+  margin: 0 0 4px;
+  font-size: 1.3rem;
+}
+
+.scheda-auth .sottotitolo {
+  margin: 0 0 18px;
+  color: var(--testo-tenue);
+  font-size: 0.88rem;
+}
+
+.scheda-auth form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scheda-auth label {
+  font-size: 0.82rem;
+  color: var(--testo-tenue);
+  margin-top: 10px;
+}
+
+.scheda-auth input {
+  border: 1px solid var(--bordo);
+  border-radius: 6px;
+  padding: 9px 10px;
+  font-family: var(--font);
+  font-size: 0.95rem;
+}
+
+.scheda-auth .btn-principale {
+  margin-top: 18px;
+}
+
+.nota-auth {
+  margin: 16px 0 0;
+  font-size: 0.85rem;
+  text-align: center;
+  color: var(--testo-tenue);
+}
+.nota-auth a { color: var(--accento); }
+
+.intestazione-con-utente {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--bordo);
+  background: var(--pannello);
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.intestazione-con-utente h1 { margin: 0 0 2px; font-size: 1.3rem; }
+.intestazione-con-utente p { margin: 0; color: var(--testo-tenue); font-size: 0.85rem; }
+
+.nav-utente { display: flex; gap: 16px; font-size: 0.88rem; }
+.nav-utente a { color: var(--accento); text-decoration: none; }
+.nav-utente a:hover { text-decoration: underline; }
+
+.pagina-storico { max-width: 720px; margin: 0 auto; padding: 20px; }
+
+.elenco-storico { display: flex; flex-direction: column; gap: 8px; }
+
+.riga-storico {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--bordo);
+  border-radius: 8px;
+  background: var(--pannello);
+}
+
+.riga-storico-dettagli { font-size: 0.8rem; color: var(--testo-tenue); margin-top: 2px; }
+
+.btn-elimina {
+  border: 1px solid var(--bordo);
+  background: #fbfaf6;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  color: #a1291f;
+}
+.btn-elimina:hover { background: #fbeceb; }

@@ -75,10 +75,18 @@ def _parsifica_indirizzo_it(indirizzo: str) -> Optional[Dict[str, str]]:
     }
 
 
+_PREFISSI_VIA_FALLBACK = ["Via", "Viale", "Corso", "Piazza"]
+
+
 def _candidati_via(via: str) -> List[str]:
+    """Varianti del nome-via da provare quando manca il prefisso
+    (Via/Viale/...). Limitato ai prefissi piu' comuni: con Nominatim che
+    impone 1 richiesta/secondo, provare tutti e 16 i prefissi possibili
+    renderebbe il calcolo lentissimo per un solo indirizzo mal scritto —
+    "Via" da sola copre la grande maggioranza dei casi reali."""
     if _RE_HA_PREFISSO_VIA.match(via.strip()):
         return [via]
-    return [f"Via {via}"] + [via] + [f"{p} {via}" for p in _PREFISSI_VIA[1:]]
+    return [via] + [f"{p} {via}" for p in _PREFISSI_VIA_FALLBACK]
 
 
 def _chiamata_nominatim(params: dict) -> List[dict]:

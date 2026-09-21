@@ -8,7 +8,7 @@ usare liberamente i servizi gratuiti di geocodifica (Nominatim) e routing
 ## Installazione (una volta sola)
 
 ```
-pip install flask requests
+pip install -r requirements.txt
 ```
 
 ## Avvio
@@ -18,6 +18,23 @@ automaticamente il browser su `http://127.0.0.1:5000`.
 
 Per chiudere il programma: torna alla finestra nera del terminale e premi
 **CTRL+C** (chiudere solo la scheda del browser non ferma il server).
+
+## Login
+
+Ora serve un account per usare l'app:
+
+- La prima volta, vai su **"Registrati"** e crea un account con la tua
+  email aziendale (di default sono ammesse solo le email `@goupnoleggi.it`
+  — configurabile, vedi `PUBBLICARE_ONLINE.md` se pubblichi l'app online
+  per tutta l'azienda).
+- In locale, gli account creati restano salvati in un file `percorso.db`
+  nella stessa cartella dello script (creato automaticamente al primo
+  avvio).
+- **"I miei percorsi"** in alto mostra lo storico dei percorsi che hai
+  salvato: ogni alternativa calcolata ha un pulsante **"Salva percorso"**
+  per aggiungerla allo storico (con un nome a tua scelta), e da lì puoi
+  eliminarli quando non servono più. Lo storico è privato per ogni
+  utente: nessuno vede i percorsi salvati da un collega.
 
 ## Cosa puoi fare
 
@@ -62,3 +79,9 @@ Per chiudere il programma: torna alla finestra nera del terminale e premi
 - Resta disponibile anche la versione a riga di comando/doppio clic più
   semplice (`percorso_economico.py`, consegnata in precedenza), se non ti
   serve l'interfaccia web.
+- **Velocità**: la geocodifica di ogni indirizzo, la prima volta, richiede
+  qualche secondo (Nominatim impone 1 richiesta al secondo). Da allora in
+  poi lo stesso indirizzo viene salvato in una cache nel database e i
+  calcoli successivi che lo riusano sono praticamente istantanei — utile
+  perché i percorsi aziendali spesso ripetono gli stessi indirizzi
+  (clienti, sedi, depositi).

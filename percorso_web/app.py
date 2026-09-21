@@ -18,26 +18,214 @@ Per chiudere il server: torna alla finestra nera e premi CTRL+C
 
 from __future__ import annotations
 
+import os
+import secrets
 import sys
 import threading
 import time
 import webbrowser
 from pathlib import Path
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask_login import (
+    LoginManager, current_user, login_required, login_user, logout_user,
+)
 
 import motore
+from modelli import (
+    IndirizzoGeocodificato, PercorsoSalvato, Utente, db,
+    email_autorizzata, domini_email_consentiti, url_database,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__, static_folder=str(BASE_DIR / "static"), template_folder=str(BASE_DIR / "templates"))
 
+app.config["SQLALCHEMY_DATABASE_URI"] = url_database()
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+_secret_key = os.environ.get("SECRET_KEY")
+if not _secret_key:
+    # In produzione VA impostata la variabile d'ambiente SECRET_KEY (vedi
+    # PUBBLICARE_ONLINE.md), altrimenti ogni riavvio del server disconnette
+    # tutti gli utenti (perche' cambia la chiave usata per firmare le
+    # sessioni). In locale una chiave casuale ad ogni avvio va benissimo.
+    _secret_key = secrets.token_hex(32)
+    if os.environ.get("DATABASE_URL"):
+        print(
+            "ATTENZIONE: SECRET_KEY non impostata in produzione. "
+            "Imposta questa variabile d'ambiente per evitare che gli utenti "
+            "vengano disconnessi ad ogni riavvio.",
+            file=sys.stderr,
+        )
+app.config["SECRET_KEY"] = _secret_key
+
+db.init_app(app)
+
+login_manager = LoginManager()
+login_manager.login_view = "login"
+login_manager.login_message = "Accedi per usare Percorso Economico."
+login_manager.init_app(app)
+
+
+@login_manager.unauthorized_handler
+def non_autorizzato():
+    # Le chiamate alle API (fetch da app.js) vogliono un errore JSON pulito
+    # da gestire lato client, non un redirect alla pagina di login.
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "errore": "Sessione scaduta: ricarica la pagina e accedi di nuovo."}), 401
+    return redirect(url_for("login"))
+
+
+@login_manager.user_loader
+def carica_utente(utente_id):
+    return db.session.get(Utente, int(utente_id))
+
+
+with app.app_context():
+    db.create_all()
+
+
+def geocodifica_con_cache(indirizzo: str):
+    """Come motore.geocodifica, ma controlla prima una cache permanente nel
+    database (condivisa da tutta l'azienda): se l'indirizzo e' gia' stato
+    cercato in passato, la risposta e' immediata invece di richiedere
+    nuove chiamate a Nominatim (che impone 1 richiesta al secondo e in
+    passato ha reso il calcolo online molto lento su elenchi di tappe che
+    si ripetono, com'e' tipico di percorsi aziendali)."""
+    voce = IndirizzoGeocodificato.query.filter_by(indirizzo=indirizzo).first()
+    if voce is not None:
+        return (voce.lat, voce.lon)
+
+    risultato = motore.geocodifica(indirizzo)
+    if risultato is not None:
+        lat, lon = risultato
+        # Un altro utente potrebbe aver geocodificato lo stesso indirizzo
+        # nel frattempo: in quel caso teniamo il suo risultato ed evitiamo
+        # un duplicato (l'indirizzo ha un vincolo di unicita').
+        try:
+            db.session.add(IndirizzoGeocodificato(indirizzo=indirizzo, lat=lat, lon=lon))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+    return risultato
+
 
 @app.get("/")
+@login_required
 def index():
-    return (BASE_DIR / "templates" / "index.html").read_text(encoding="utf-8")
+    return render_template("index.html", utente_nome=current_user.nome)
+
+
+@app.get("/login")
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+    return render_template("login.html", errore=None, email=None)
+
+
+@app.post("/login")
+def login_post():
+    email = request.form.get("email", "").strip().lower()
+    password = request.form.get("password", "")
+    utente = Utente.query.filter_by(email=email).first()
+    if not utente or not utente.verifica_password(password):
+        return render_template("login.html", errore="Email o password non corrette.", email=email), 401
+    login_user(utente, remember=True)
+    return redirect(url_for("index"))
+
+
+@app.get("/registrati")
+def registrati():
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+    return render_template(
+        "registrati.html", errore=None, nome=None, email=None,
+        domini_ammessi=", ".join("@" + d for d in domini_email_consentiti()) or "qualsiasi dominio",
+    )
+
+
+@app.post("/registrati")
+def registrati_post():
+    nome = request.form.get("nome", "").strip()
+    email = request.form.get("email", "").strip().lower()
+    password = request.form.get("password", "")
+    domini_ammessi_testo = ", ".join("@" + d for d in domini_email_consentiti()) or "qualsiasi dominio"
+
+    errore = None
+    if not nome or not email or not password:
+        errore = "Compila tutti i campi."
+    elif len(password) < 8:
+        errore = "La password deve avere almeno 8 caratteri."
+    elif not email_autorizzata(email):
+        errore = f"Puoi registrarti solo con un'email aziendale ({domini_ammessi_testo})."
+    elif Utente.query.filter_by(email=email).first() is not None:
+        errore = "Esiste gia' un account con questa email. Prova ad accedere."
+
+    if errore:
+        return render_template(
+            "registrati.html", errore=errore, nome=nome, email=email, domini_ammessi=domini_ammessi_testo
+        ), 400
+
+    utente = Utente(email=email, nome=nome)
+    utente.imposta_password(password)
+    db.session.add(utente)
+    db.session.commit()
+    login_user(utente, remember=True)
+    return redirect(url_for("index"))
+
+
+@app.get("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("login"))
+
+
+@app.get("/storico")
+@login_required
+def storico():
+    percorsi = (
+        PercorsoSalvato.query.filter_by(utente_id=current_user.id)
+        .order_by(PercorsoSalvato.creato_il.desc())
+        .all()
+    )
+    return render_template("storico.html", percorsi=percorsi, utente_nome=current_user.nome)
+
+
+@app.post("/storico/<int:percorso_id>/elimina")
+@login_required
+def elimina_percorso(percorso_id):
+    percorso = db.session.get(PercorsoSalvato, percorso_id)
+    if percorso is not None and percorso.utente_id == current_user.id:
+        db.session.delete(percorso)
+        db.session.commit()
+    return redirect(url_for("storico"))
+
+
+@app.post("/api/salva")
+@login_required
+def api_salva():
+    dati = request.get_json(force=True, silent=True) or {}
+    nome = (dati.get("nome") or "").strip() or "Percorso senza nome"
+    alternativa = dati.get("alternativa")
+    if not alternativa or not isinstance(alternativa, dict):
+        return jsonify({"ok": False, "errore": "Nessun percorso da salvare."}), 400
+
+    percorso = PercorsoSalvato(
+        utente_id=current_user.id,
+        nome=nome[:255],
+        dati_json=alternativa,
+        distanza_km=alternativa.get("distanza_km"),
+        tempo_min=alternativa.get("tempo_min"),
+        numero_tappe=len(alternativa.get("tappe", [])),
+    )
+    db.session.add(percorso)
+    db.session.commit()
+    return jsonify({"ok": True, "id": percorso.id})
 
 
 @app.post("/api/calcola")
+@login_required
 def api_calcola():
     dati = request.get_json(force=True, silent=True) or {}
     tappe_in = dati.get("tappe", [])
@@ -67,7 +255,7 @@ def api_calcola():
         except (TypeError, ValueError):
             raggio_km = None
         if raggio_km and raggio_km > 0:
-            centro_coord = motore.geocodifica(centro_raggio_indirizzo)
+            centro_coord = geocodifica_con_cache(centro_raggio_indirizzo)
             if centro_coord is None:
                 return jsonify({
                     "ok": False,
@@ -78,7 +266,7 @@ def api_calcola():
     geocodificate = []  # lista di (indice_originale, indirizzo, lat, lon)
     falliti = []
     for i, ind in enumerate(indirizzi):
-        risultato = motore.geocodifica(ind)
+        risultato = geocodifica_con_cache(ind)
         if risultato is None:
             falliti.append(ind)
             continue
@@ -201,6 +389,7 @@ def api_calcola():
 
 
 @app.post("/api/geometria")
+@login_required
 def api_geometria():
     """Calcola il tracciato stradale reale (per disegnarlo sulla mappa) per
     una sequenza di tappe gia' geocodificate. Chiamato solo quando l'utente

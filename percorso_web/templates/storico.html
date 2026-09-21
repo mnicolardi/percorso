@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>I miei percorsi - Percorso Economico</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/auth.css">
+</head>
+<body>
+
+<header class="intestazione-con-utente">
+  <div>
+    <h1>I miei percorsi</h1>
+    <p>Percorsi salvati da {{ utente_nome }}.</p>
+  </div>
+  <nav class="nav-utente">
+    <a href="/">&larr; Torna al calcolo</a>
+    <a href="/logout">Esci</a>
+  </nav>
+</header>
+
+<main class="pagina-storico">
+  {% if percorsi %}
+    <div class="elenco-storico">
+      {% for p in percorsi %}
+      <div class="riga-storico">
+        <div>
+          <strong>{{ p.nome }}</strong>
+          <div class="riga-storico-dettagli">
+            {{ p.numero_tappe }} tappe &middot; {{ p.distanza_km }} km &middot;
+            {{ p.creato_il.strftime("%d/%m/%Y %H:%M") }}
+          </div>
+        </div>
+        <form method="post" action="/storico/{{ p.id }}/elimina" onsubmit="return confirm('Eliminare questo percorso salvato?');">
+          <button type="submit" class="btn-elimina">Elimina</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="vuoto">Non hai ancora salvato nessun percorso. Calcolane uno e usa "Salva percorso".</p>
+  {% endif %}
+</main>
+
+</body>
+</html>

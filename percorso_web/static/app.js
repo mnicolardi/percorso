@@ -13,6 +13,26 @@
   let mappaLeaflet = null;
   let ultimaRisposta = null;
   let ultimoCerchio = null;
+
+  // Legge la risposta come JSON, ma se il server ha risposto con una
+  // pagina di errore (es. timeout del server, non riuscendo a rispondere
+  // in tempo con molte tappe da geocodificare) da' un messaggio chiaro in
+  // italiano invece del criptico errore di sintassi JavaScript.
+  async function leggiJsonSicuro(rispostaFetch) {
+    const testo = await rispostaFetch.text();
+    try {
+      return JSON.parse(testo);
+    } catch (e) {
+      if (rispostaFetch.status >= 500) {
+        throw new Error(
+          "Il server ha impiegato troppo tempo o non ha risposto correttamente " +
+            "(probabilmente troppe tappe da geocodificare tutte insieme). " +
+            "Riprova con meno tappe alla volta, oppure attendi qualche secondo e riprova."
+        );
+      }
+      throw new Error("Risposta del server non valida (" + rispostaFetch.status + ").");
+    }
+  }
   let layerCerchio = null;
 
   const INDIRIZZI_ESEMPIO = [
@@ -192,7 +212,8 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(corpo),
       });
-      const dati = await r.json();
+      if (gestisciSessioneScaduta(r)) return;
+      const dati = await leggiJsonSicuro(r);
       if (!dati.ok) {
         mostraMessaggio(dati.errore || "Errore nel calcolo.", "errore");
         risultatiEl.innerHTML = '<div class="vuoto">Nessun risultato.</div>';
@@ -251,6 +272,7 @@
         <div class="alternativa-azioni">
           <button type="button" class="btn-mappa">Mostra su mappa</button>
           <button type="button" class="btn-csv">Scarica CSV</button>
+          <button type="button" class="btn-salva">Salva percorso</button>
         </div>
       `;
       div.querySelector(".btn-mappa").addEventListener("click", () => {
@@ -259,8 +281,47 @@
         mostraSuMappa(alt);
       });
       div.querySelector(".btn-csv").addEventListener("click", () => scaricaCsv(alt, i));
+      div.querySelector(".btn-salva").addEventListener("click", (ev) => salvaPercorso(alt, ev.target));
       risultatiEl.appendChild(div);
     });
+  }
+
+  async function salvaPercorso(alt, bottone) {
+    const nome = prompt("Nome per questo percorso (es. \"Giro clienti Bari nord\"):", "");
+    if (nome === null) return; // annullato
+    bottone.disabled = true;
+    const testoOriginale = bottone.textContent;
+    bottone.textContent = "Salvataggio...";
+    try {
+      const r = await fetch("/api/salva", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nome: nome.trim() || "Percorso senza nome", alternativa: alt }),
+      });
+      if (gestisciSessioneScaduta(r)) return;
+      const dati = await leggiJsonSicuro(r);
+      if (dati.ok) {
+        bottone.textContent = "Salvato ✓";
+        setTimeout(() => { bottone.textContent = testoOriginale; bottone.disabled = false; }, 2000);
+      } else {
+        mostraMessaggio(dati.errore || "Errore nel salvataggio.", "errore");
+        bottone.textContent = testoOriginale;
+        bottone.disabled = false;
+      }
+    } catch (e) {
+      mostraMessaggio("Errore di comunicazione con il server: " + e, "errore");
+      bottone.textContent = testoOriginale;
+      bottone.disabled = false;
+    }
+  }
+
+  function gestisciSessioneScaduta(rispostaFetch) {
+    if (rispostaFetch.status === 401) {
+      mostraMessaggio("Sessione scaduta. Verrai reindirizzato alla pagina di accesso...", "avviso");
+      setTimeout(() => { window.location.href = "/login"; }, 1500);
+      return true;
+    }
+    return false;
   }
 
   function scaricaCsv(alt, indice) {
@@ -364,7 +425,8 @@
           andata_ritorno: alt.andata_ritorno,
         }),
       });
-      const dati = await r.json();
+      if (gestisciSessioneScaduta(r)) return;
+      const dati = await leggiJsonSicuro(r);
       if (dati.ok) {
         mappaLeaflet.removeLayer(lineaDiretta);
         L.polyline(dati.punti, { color: "#2b6cb0", weight: 4, opacity: 0.85 }).addTo(mappaLeaflet);
