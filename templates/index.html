@@ -31,14 +31,61 @@
       <button type="button" id="btn-aggiungi">+ Aggiungi tappa</button>
       <button type="button" id="btn-importa">&uarr; Importa da file (.txt/.csv)</button>
       <input type="file" id="file-importa" accept=".txt,.csv" style="display:none;">
+      <button type="button" id="btn-posizione-partenza">&#128205; Posizione attuale come partenza</button>
+      <button type="button" id="btn-posizione-arrivo">&#128205; Posizione attuale come arrivo</button>
     </div>
-    <p id="nota-importa" class="nota-piccola">Un indirizzo per riga. Sostituisce le tappe attuali.</p>
+    <p id="nota-importa" class="nota-piccola">Un indirizzo per riga. Sostituisce le tappe attuali. I pulsanti con &#128205; chiedono al browser la tua posizione attuale (serve il permesso di geolocalizzazione).</p>
+
+    <div class="riga-collega-google">
+      {% if google_collegato %}
+        <span class="badge-google-ok">&#10003; Account Google collegato</span>
+        <form method="post" action="/google/scollega" style="display:inline;">
+          <button type="submit" class="link-scollega">Scollega</button>
+        </form>
+      {% else %}
+        <a href="/google/collega" class="btn-collega-google">Collega il mio account Google</a>
+        <span class="nota-piccola" style="margin:0;">per leggere anche fogli privati, senza condividerli con nessuno</span>
+      {% endif %}
+    </div>
+    <div class="riga-foglio-google">
+      <input type="text" id="input-foglio-google" placeholder="Link del Google Sheet (anche privato, se hai collegato il tuo account Google)">
+      <button type="button" id="btn-importa-foglio">Carica da Google Fogli</button>
+    </div>
+    <p class="nota-piccola">
+      Funziona anche con il foglio dietro un'app AppSheet.
+      {% if google_collegato %}
+        Con l'account Google collegato puoi incollare il link del foglio cosi' com'e', anche se non e' condiviso con nessuno: legge il foglio come se lo aprissi tu.
+      {% else %}
+        Senza collegare un account Google, il foglio deve essere condiviso con "Chiunque abbia il link" (almeno come visualizzatore) - oppure collega il tuo account Google qui sopra per non doverlo condividere.
+      {% endif %}
+      Dopo il caricamento potrai filtrare e scegliere quali righe usare come tappe.
+    </p>
+
+    <div id="pannello-foglio-google" class="pannello-foglio" style="display:none;">
+      <div class="foglio-controlli">
+        <input type="text" id="filtro-foglio" placeholder="Filtra le righe (cerca in tutte le colonne)...">
+        <label>Colonna indirizzo:
+          <select id="sel-colonna-indirizzo"></select>
+        </label>
+        <button type="button" id="btn-seleziona-tutti-foglio">Seleziona tutti (visibili)</button>
+        <button type="button" id="btn-deseleziona-tutti-foglio">Deseleziona tutti</button>
+      </div>
+      <div id="tabella-foglio" class="tabella-foglio"></div>
+      <div class="foglio-azioni">
+        <span id="conteggio-selezionati-foglio" class="nota-piccola">0 righe selezionate</span>
+        <button type="button" class="btn-principale" id="btn-aggiungi-selezionati-foglio">+ Aggiungi tappe selezionate</button>
+      </div>
+    </div>
 
     <h2>Opzioni</h2>
     <div class="opzioni">
       <div>
         <label for="sel-partenza">Partenza obbligatoria</label>
         <select id="sel-partenza"><option value="">Nessuna (scelta automatica)</option></select>
+      </div>
+      <div>
+        <label for="sel-arrivo">Arrivo obbligatorio</label>
+        <select id="sel-arrivo"><option value="">Nessuno (scelta automatica)</option></select>
       </div>
       <div>
         <label for="input-alternative">Numero di alternative</label>

@@ -18,30 +18,72 @@ Per chiudere il server: torna alla finestra nera e premi CTRL+C
 
 from __future__ import annotations
 
-import os
-import secrets
 import sys
-import threading
-import time
-import webbrowser
-from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, url_for
-from flask_login import (
-    LoginManager, current_user, login_required, login_user, logout_user,
-)
 
-import motore
-from modelli import (
-    IndirizzoGeocodificato, PercorsoSalvato, Utente, db,
-    email_autorizzata, domini_email_consentiti, url_database,
-)
+def _lanciato_con_doppio_clic() -> bool:
+    return len(sys.argv) == 1
+
+
+def _errore_avvio(messaggio: str) -> None:
+    """Mostra un errore leggibile e, se il programma e' stato aperto con un
+    doppio clic, tiene aperta la finestra finche' non si preme INVIO. Senza
+    questo, un errore che avviene PRIMA dell'avvio del server (es. una
+    libreria mancante) fa chiudere la finestra troppo in fretta per riuscire
+    a leggere il messaggio."""
+    print("\n" + "=" * 70, file=sys.stderr)
+    print("IMPOSSIBILE AVVIARE IL PROGRAMMA", file=sys.stderr)
+    print("=" * 70, file=sys.stderr)
+    print(messaggio, file=sys.stderr)
+    print("=" * 70, file=sys.stderr)
+    if _lanciato_con_doppio_clic():
+        input("\nPremi INVIO per chiudere questa finestra...")
+    sys.exit(1)
+
+
+try:
+    import json
+    import os
+    import secrets
+    import threading
+    import time
+    import webbrowser
+    from pathlib import Path
+
+    from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+    from flask_login import (
+        LoginManager, current_user, login_required, login_user, logout_user,
+    )
+    from google_auth_oauthlib.flow import Flow
+    from google.auth.transport.requests import Request as RichiestaGoogleAuth
+    from google.oauth2.credentials import Credentials as CredenzialiGoogle
+
+    import motore
+    from modelli import (
+        IndirizzoGeocodificato, PercorsoSalvato, Utente, db,
+        email_autorizzata, domini_email_consentiti, url_database,
+    )
+except ImportError as e:
+    _errore_avvio(
+        f"Manca una libreria necessaria: {e}\n\n"
+        "Soluzione: apri il terminale/prompt dei comandi in questa cartella\n"
+        "ed esegui:\n\n"
+        "    pip install -r requirements.txt\n\n"
+        "poi riprova ad avviare il programma."
+    )
 
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__, static_folder=str(BASE_DIR / "static"), template_folder=str(BASE_DIR / "templates"))
 
 app.config["SQLALCHEMY_DATABASE_URI"] = url_database()
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+if not os.environ.get("DATABASE_URL"):
+    # In locale il server gira su http://127.0.0.1 (non https): la libreria
+    # OAuth di Google lo rifiuterebbe per principio, ma per 127.0.0.1/localhost
+    # Google stesso lo permette (e' il modo normale di testare un'app in
+    # sviluppo). In produzione (DATABASE_URL impostata) NON va mai attivato.
+    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 
 _secret_key = os.environ.get("SECRET_KEY")
 if not _secret_key:
@@ -81,8 +123,136 @@ def carica_utente(utente_id):
     return db.session.get(Utente, int(utente_id))
 
 
-with app.app_context():
-    db.create_all()
+def _aggiungi_colonne_mancanti():
+    """Migrazione minima e automatica: se il database esisteva gia' da
+    prima che un modello guadagnasse una nuova colonna (es. per il
+    collegamento a Google), la aggiunge senza cancellare i dati esistenti.
+    db.create_all() da solo NON lo fa (crea solo tabelle mancanti, non
+    modifica quelle gia' esistenti)."""
+    from sqlalchemy import inspect, text
+
+    ispettore = inspect(db.engine)
+    colonne_esistenti = {c["name"] for c in ispettore.get_columns("utenti")}
+    if "google_token_json" not in colonne_esistenti:
+        with db.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE utenti ADD COLUMN google_token_json TEXT"))
+
+
+try:
+    with app.app_context():
+        db.create_all()
+        _aggiungi_colonne_mancanti()
+except Exception as e:
+    _errore_avvio(
+        f"Non riesco a inizializzare il database: {e}\n\n"
+        "Se stai usando il database locale (nessuna variabile DATABASE_URL "
+        "impostata), controlla di avere i permessi di scrittura in questa "
+        "cartella. Se invece usi un database online, controlla che "
+        "l'indirizzo (DATABASE_URL) sia corretto e raggiungibile."
+    )
+
+
+# ----------------------------------------------------------------------
+# Collegamento con Google (OAuth) per leggere Google Sheet PRIVATI
+# ----------------------------------------------------------------------
+
+GOOGLE_SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+
+
+def _configurazione_oauth_google():
+    """Le credenziali dell'APP (non dell'utente) per parlare con Google:
+    vanno create una volta sola su console.cloud.google.com (vedi
+    COLLEGARE_GOOGLE.md) e configurate con le variabili d'ambiente
+    GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET, oppure - piu' comodo in locale
+    - mettendo il file scaricato da Google Cloud Console come
+    'google_client_secret.json' in questa stessa cartella."""
+    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+    if client_id and client_secret:
+        return {
+            "web": {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        }
+    file_credenziali = BASE_DIR / "google_client_secret.json"
+    if file_credenziali.exists():
+        try:
+            return json.loads(file_credenziali.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def _credenziali_google_utente(utente):
+    """Restituisce le credenziali Google gia' pronte all'uso per l'utente
+    (rinnovando l'access token scaduto quando serve), oppure None se
+    l'utente non ha collegato il proprio account Google."""
+    if not utente.google_token_json:
+        return None
+    try:
+        info = json.loads(utente.google_token_json)
+        creds = CredenzialiGoogle.from_authorized_user_info(info, GOOGLE_SCOPES)
+    except Exception:
+        return None
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(RichiestaGoogleAuth())
+        except Exception:
+            return None
+        utente.google_token_json = creds.to_json()
+        db.session.commit()
+    return creds
+
+
+@app.get("/google/collega")
+@login_required
+def google_collega():
+    config = _configurazione_oauth_google()
+    if not config:
+        return (
+            "Collegamento a Google non configurato su questo server. "
+            "Manca GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (o il file "
+            "google_client_secret.json) - vedi COLLEGARE_GOOGLE.md.",
+            500,
+        )
+    flow = Flow.from_client_config(
+        config, scopes=GOOGLE_SCOPES, redirect_uri=url_for("google_callback", _external=True)
+    )
+    url_autorizzazione, stato = flow.authorization_url(
+        access_type="offline", include_granted_scopes="true", prompt="consent"
+    )
+    session["stato_oauth_google"] = stato
+    return redirect(url_autorizzazione)
+
+
+@app.get("/google/callback")
+@login_required
+def google_callback():
+    config = _configurazione_oauth_google()
+    stato = session.pop("stato_oauth_google", None)
+    if not config or not stato:
+        return redirect(url_for("index"))
+    flow = Flow.from_client_config(
+        config, scopes=GOOGLE_SCOPES, state=stato, redirect_uri=url_for("google_callback", _external=True)
+    )
+    try:
+        flow.fetch_token(authorization_response=request.url)
+    except Exception as e:
+        return redirect(url_for("index", errore_google="1"))
+    current_user.google_token_json = flow.credentials.to_json()
+    db.session.commit()
+    return redirect(url_for("index"))
+
+
+@app.post("/google/scollega")
+@login_required
+def google_scollega():
+    current_user.google_token_json = None
+    db.session.commit()
+    return redirect(url_for("index"))
 
 
 def geocodifica_con_cache(indirizzo: str):
@@ -113,7 +283,11 @@ def geocodifica_con_cache(indirizzo: str):
 @app.get("/")
 @login_required
 def index():
-    return render_template("index.html", utente_nome=current_user.nome)
+    return render_template(
+        "index.html",
+        utente_nome=current_user.nome,
+        google_collegato=bool(current_user.google_token_json),
+    )
 
 
 @app.get("/login")
@@ -230,6 +404,7 @@ def api_calcola():
     dati = request.get_json(force=True, silent=True) or {}
     tappe_in = dati.get("tappe", [])
     partenza_idx_originale = dati.get("partenza")  # indice nella lista originale, o None
+    arrivo_idx_originale = dati.get("arrivo")  # indice nella lista originale, o None
     andata_ritorno = bool(dati.get("andata_ritorno", False))
     consumo = dati.get("consumo")
     prezzo = dati.get("prezzo")
@@ -245,6 +420,16 @@ def api_calcola():
 
     if any(not ind for ind in indirizzi):
         return jsonify({"ok": False, "errore": "Uno o piu' indirizzi sono vuoti."}), 400
+
+    if (
+        partenza_idx_originale is not None
+        and arrivo_idx_originale is not None
+        and partenza_idx_originale == arrivo_idx_originale
+    ):
+        return jsonify({
+            "ok": False,
+            "errore": "La tappa di partenza e quella di arrivo non possono essere la stessa.",
+        }), 400
 
     # --- distanza massima da un centro (un "cerchio" sulla mappa), opzionale ---
     centro_coord = None
@@ -282,6 +467,15 @@ def api_calcola():
                 "falliti": falliti,
             }), 400
 
+    if arrivo_idx_originale is not None:
+        indirizzo_arrivo = indirizzi[arrivo_idx_originale]
+        if indirizzo_arrivo in falliti:
+            return jsonify({
+                "ok": False,
+                "errore": f"L'indirizzo di arrivo non e' stato trovato: {indirizzo_arrivo!r}",
+                "falliti": falliti,
+            }), 400
+
     # --- esclude le tappe fuori dal raggio massimo dal centro (se impostato) ---
     fuori_raggio = []
     if centro_coord is not None and raggio_km:
@@ -307,6 +501,19 @@ def api_calcola():
                     "fuori_raggio": fuori_raggio,
                 }), 400
 
+        if arrivo_idx_originale is not None:
+            indirizzo_arrivo = indirizzi[arrivo_idx_originale]
+            if any(f["indirizzo"] == indirizzo_arrivo for f in fuori_raggio):
+                return jsonify({
+                    "ok": False,
+                    "errore": (
+                        f"La tappa di arrivo e' fuori dal raggio massimo impostato: "
+                        f"{indirizzo_arrivo!r}"
+                    ),
+                    "falliti": falliti,
+                    "fuori_raggio": fuori_raggio,
+                }), 400
+
     if len(geocodificate) < 2:
         return jsonify({
             "ok": False,
@@ -326,10 +533,16 @@ def api_calcola():
     if partenza_idx_originale is not None and partenza_idx_originale in mappa_orig_a_nuovo:
         indice_partenza = mappa_orig_a_nuovo[partenza_idx_originale]
 
+    indice_arrivo = None
+    if arrivo_idx_originale is not None and arrivo_idx_originale in mappa_orig_a_nuovo:
+        indice_arrivo = mappa_orig_a_nuovo[arrivo_idx_originale]
+
     indici_fissi_in_ordine = [
         mappa_orig_a_nuovo[orig]
         for orig, ind, _, _ in geocodificate
-        if ordine_fisso_flag[orig] and mappa_orig_a_nuovo[orig] != indice_partenza
+        if ordine_fisso_flag[orig]
+        and mappa_orig_a_nuovo[orig] != indice_partenza
+        and mappa_orig_a_nuovo[orig] != indice_arrivo
     ]
 
     try:
@@ -341,6 +554,7 @@ def api_calcola():
     ordini = motore.ottimizza_con_alternative(
         len(tappe), indici_fissi_in_ordine, indice_partenza, matrice_dist, andata_ritorno,
         n_alternative=max(1, min(n_alternative, 5)),
+        indice_arrivo=indice_arrivo,
     )
 
     alternative = []
@@ -415,6 +629,72 @@ def api_geometria():
         return jsonify({"ok": False, "errore": f"Errore nel calcolo del tracciato: {e}"}), 502
 
     return jsonify({"ok": True, "punti": percorso})
+
+
+@app.post("/api/geolocalizza")
+@login_required
+def api_geolocalizza():
+    """Trasforma le coordinate GPS rilevate dal browser (geolocalizzazione
+    del dispositivo) in un indirizzo utilizzabile come tappa."""
+    dati = request.get_json(force=True, silent=True) or {}
+    try:
+        lat = float(dati.get("lat"))
+        lon = float(dati.get("lon"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "errore": "Coordinate non valide."}), 400
+
+    try:
+        indirizzo = motore.geocodifica_inversa(lat, lon)
+    except Exception as e:
+        return jsonify({"ok": False, "errore": f"Errore nel determinare l'indirizzo: {e}"}), 502
+
+    if not indirizzo:
+        return jsonify({
+            "ok": False,
+            "errore": "Non sono riuscito a determinare un indirizzo dalla tua posizione attuale.",
+        }), 502
+
+    return jsonify({"ok": True, "indirizzo": indirizzo, "lat": lat, "lon": lon})
+
+
+@app.post("/api/importa-foglio")
+@login_required
+def api_importa_foglio():
+    """Legge TUTTE le righe/colonne di un Google Sheet condiviso
+    pubblicamente (link, non serve login Google), cosi' il client puo'
+    mostrarle e lasciare all'utente filtrarle/selezionarle (utile per fogli
+    tipo AppSheet con tante colonne: cliente, zona, indirizzo, note...)."""
+    dati = request.get_json(force=True, silent=True) or {}
+    link = (dati.get("link") or "").strip()
+    if not link:
+        return jsonify({"ok": False, "errore": "Incolla prima il link del foglio Google."}), 400
+
+    credenziali = _credenziali_google_utente(current_user)
+    try:
+        if credenziali is not None:
+            # Account Google collegato: legge il foglio con l'API ufficiale,
+            # come se fosse l'utente stesso ad aprirlo - funziona anche con
+            # fogli privati, non serve condividerli con nessuno.
+            intestazioni, righe = motore.importa_righe_da_google_sheet_api(link, credenziali)
+        else:
+            # Nessun account Google collegato: unica alternativa e' un
+            # foglio condiviso pubblicamente via link.
+            intestazioni, righe = motore.importa_righe_da_google_sheet(link)
+    except motore.ErroreImportazioneFoglio as e:
+        return jsonify({"ok": False, "errore": str(e), "google_collegato": credenziali is not None}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "errore": f"Errore imprevisto nell'importazione: {e}"}), 502
+
+    if not righe:
+        return jsonify({"ok": False, "errore": "Il foglio sembra vuoto (nessuna riga con dati)."}), 400
+
+    colonna_indirizzo_suggerita = motore.indovina_colonna_indirizzo(intestazioni)
+    return jsonify({
+        "ok": True,
+        "intestazioni": intestazioni,
+        "righe": righe,
+        "colonna_indirizzo_suggerita": colonna_indirizzo_suggerita,
+    })
 
 
 def _apri_browser():
